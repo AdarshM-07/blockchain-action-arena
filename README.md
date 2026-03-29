@@ -10,7 +10,7 @@ This is a fully on-chain fighting game where players:
 - Use strategic positioning (up/down) and attacks (basic/medium/special)
 - Winner takes 0.0015 ETH, owner receives 0.0005 ETH platform fee
 
-⚙️ Built using NextJS, Foundry, Wagmi, Viem, and Typescript (Scaffold-ETH 2).
+⚙️ Built using **Next.js 15**, **Foundry**, **Wagmi v2**, **Viem**, and **TypeScript** (Scaffold-ETH 2).
 
 ## ✨ Features
 
@@ -29,14 +29,18 @@ This is a fully on-chain fighting game where players:
 - **GameConsole.sol**: Matchmaking system, emits `MatchFound` events
 - **PlayGround.sol**: Individual game logic with 5 rounds, damage calculation, prize distribution
 
-### Frontend (Next.js + TypeScript)
-- Real-time battle interface with timer (10s waiting + 30s move selection)
-- Move selection UI with 6 options
-- Auto-refresh player stats and game state
+### Frontend (Next.js 15 + TypeScript)
+- Real-time battle interface with animated arena
+- Move selection UI with 6 strategic options
+- Auto-refresh player stats every 3 seconds
+- Responsive design with TailwindCSS + DaisyUI
+- Integrated block explorer view
 
 ### Backend Service (Node.js)
-- Monitors active games via events
-- Calls `calculateResult()` when time expires from owner's account
+- Monitors active games via `MatchFound` contract events
+- Tracks game completion time per round
+- Automatically calls `calculateResult()` when move selection expires
+- Runs from owner's account to pay gas fees
 
 ## 🛠️ Tech Stack
 
@@ -59,8 +63,8 @@ Before you begin, you need to install the following tools:
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/AdarshM-07/blockchain-battle-arena
-cd blockchain-battle-arena
+git clone https://github.com/AdarshM-07/blockchain-action-arena
+cd blockchain-action-arena
 yarn install
 ```
 
@@ -98,9 +102,8 @@ npm start
 ### 5. Start the frontend (in a new terminal)
 
 ```bash
-yarn start
-# or
-npm start
+cd packages/nextjs
+yarn dev
 ```
 
 Visit your app on: `http://localhost:3000`
@@ -135,20 +138,28 @@ Visit your app on: `http://localhost:3000`
 ## 📁 Project Structure
 
 ```
-blockchain-battle-arena/
+blockchain-action-arena/
 ├── packages/
 │   ├── foundry/              # Smart contracts
 │   │   ├── contracts/
 │   │   │   ├── GameConsole.sol
 │   │   │   └── PlayGround.sol
-│   │   └── script/
-│   │       └── Deploy.s.sol
-│   └── nextjs/               # Frontend
+│   │   ├── script/
+│   │   │   ├── Deploy.s.sol
+│   │   │   ├── DeployHelpers.s.sol
+│   │   │   └── VerifyAll.s.sol
+│   │   └── test/             # Contract tests
+│   └── nextjs/               # Frontend (Next.js 15)
 │       ├── app/
 │       │   ├── page.tsx      # Home page (matchmaking)
-│       │   └── game/[address]/page.tsx  # Game page
+│       │   ├── game/[address]/page.tsx  # Game battle page
+│       │   └── blockexplorer/
+│       ├── components/
+│       │   ├── BattleArena.tsx       # Game visualization
+│       │   ├── Header.tsx
+│       │   └── Footer.tsx
 │       └── contracts/        # Contract ABIs
-└── backend-service/          # Automated calculation
+└── backend-service/          # Automated round calculation
     ├── index.js
     └── package.json
 ```
@@ -156,34 +167,53 @@ blockchain-battle-arena/
 ## 🎮 Game Mechanics
 
 ### Attack System
-- **Basic Attack (3)**: 1 damage
-- **Medium Attack (2)**: 2 damage
-- **Special Attack (1)**: 3 damage
-- Attacks auto-convert to "stay" when exhausted
+- **Basic Attack (3 uses)**: 1 damage per attack
+- **Medium Attack (2 uses)**: 2 damage per attack
+- **Special Attack (1 use)**: 3 damage per attack
+- Attacks auto-convert to "Stay" when all uses are exhausted
+
+### Positioning & Defense
+- **Up Position**: Move to upper lane
+- **Down Position**: Move to lower/ground lane
+- **Stay**: Remain in current position
+- Attacks only hit if both players are in the same lane
 
 ### Damage Calculation
-- Attacks hit if in same lane as opponent's next position
-- Simultaneous attacks reduce each other's damage
-- Defensive positioning can block incoming damage
+- Damage is applied based on positioning during move calculation
+- Player health starts at 10 and decreases with each successful attack
+- Game ends when a player reaches 0 health or after 5 rounds
 
 ### Timer System
 - **10 seconds**: Waiting phase (new round prep)
-- **30 seconds**: Move selection phase
-- **Auto-calculation**: Backend triggers at time expiry
+- **30 seconds**: Move selection phase (choose and submit 5 moves)
+- **Auto-calculation**: Backend triggers `calculateResult()` when time expires
 
 ## 🐛 Troubleshooting
 
-**Backend not working**
-- Check `GAME_CONSOLE_ADDRESS` matches deployed address
-- Verify blockchain is running: `yarn chain`
+**Frontend won't start**
+- Ensure you're in `packages/nextjs` directory
+- Try: `rm -rf .next node_modules && yarn install && yarn dev`
+- Check that port 3000 is not in use
 
-**Timer shows "Time's Up" during waiting**
+**Backend not working**
+- Check `GAME_CONSOLE_ADDRESS` matches deployed address in `backend-service/index.js`
+- Verify blockchain is running: `yarn chain`
+- Check backend console for connection errors
+
+**Timer shows "Time's Up" during waiting phase**
 - Refresh the page
-- Check console for errors
+- Check browser console for errors
+- Verify local blockchain is still running
 
 **Can't submit moves**
-- Ensure timer shows positive seconds (not waiting phase)
-- Verify you're connected as a player
+- Ensure you're one of the two players in the game
+- Verify timer shows positive seconds (not in waiting phase)
+- Check that your wallet is properly connected
+
+**Game state not updating**
+- Backend service must be running to calculate results
+- Check `npm start` output in backend-service terminal
+- Verify `OWNER_PRIVATE_KEY` has sufficient balance for gas fees
 
 ## 🔧 Development
 
@@ -215,14 +245,24 @@ rm -rf packages/nextjs/.next
 - `calculateResult()`: Process round (called by owner/backend)
 - Emits `RoundCalculated` event on completion
 
+## ✅ Recent Updates
+
+- ✨ Improved game page rendering with optimized React hooks
+- 🔧 Enhanced BattleArena component with better memoization
+- 🎨 Refined UI with better player positioning visualization
+- 📝 Fixed all ESLint warnings and TypeScript errors
+- 🚀 Improved code quality and performance
+
 ## 🚀 Future Enhancements
 
-- [ ] Multiple concurrent games
-- [ ] Leaderboard system
-- [ ] Ranked matchmaking
-- [ ] NFT rewards
-- [ ] Replay system
+- [ ] Advanced replay system (already has basic replay)
+- [ ] Leaderboard and player statistics
+- [ ] Ranked matchmaking with ELO rating
+- [ ] NFT rewards for winners
 - [ ] Mobile optimization
+- [ ] Multi-game dashboard
+- [ ] Chat during matchmaking
+- [ ] Custom avatar support
 
 ## 📞 Support
 
