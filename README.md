@@ -1,4 +1,4 @@
-# ⚔️ Action Arena - Blockchain Battle Arena
+# ⚔️ Blockchain Action Arena
 
 **A fully on-chain PvP fighting game built on Ethereum with real-time blockchain interaction, smart contract-based matchmaking, and automated round calculation using event-driven architecture.**
 
