@@ -1,10 +1,12 @@
 "use client";
+// Force Next.js HMR to pick up the new PlayGround.json ABI
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Address } from "@scaffold-ui/components";
-import { useAccount, useReadContract, useWriteContract } from "wagmi";
+import { useAccount, useReadContract, useWriteContract, usePublicClient } from "wagmi";
 import PlayGroundABI from "~~/contracts/PlayGround.json";
+import { BattleArena } from "~~/components/BattleArena";
 import { useScaffoldWriteContract, useTargetNetwork } from "~~/hooks/scaffold-eth";
 
 type MoveType = 0 | 1 | 2 | 3 | 4 | 5;
@@ -40,6 +42,64 @@ export default function GamePage() {
 
   const { writeContractAsync } = useWriteContract();
   const { writeContractAsync: writeClearMatch } = useScaffoldWriteContract({ contractName: "GameConsole" });
+
+  const [isReplaying, setIsReplaying] = useState(false);
+  const [hasSubmittedMoves, setHasSubmittedMoves] = useState(false);
+  const [replayStep, setReplayStep] = useState(0);
+  const [replayP1Moves, setReplayP1Moves] = useState<number[]>([]);
+  const [replayP2Moves, setReplayP2Moves] = useState<number[]>([]);
+  const [prevGameCount, setPrevGameCount] = useState<number | undefined>(undefined);
+
+  const publicClient = usePublicClient({ chainId: targetNetwork.id });
+
+  useEffect(() => {
+    if (!publicClient || !gameAddress) return;
+    try {
+      const unwatch = publicClient.watchContractEvent({
+        address: gameAddress as `0x${string}`,
+        abi: PlayGroundABI.abi as any,
+        eventName: "RoundCalculated",
+        onLogs: (logs) => {
+          if (!logs || !logs[0]) return;
+          const args = logs[0].args as any;
+          if (args.p1Moves && args.p2Moves) {
+            setIsReplaying((prev) => {
+              if (!prev) {
+                setReplayStep(0);
+                setReplayP1Moves([...args.p1Moves]);
+                setReplayP2Moves([...args.p2Moves]);
+                return true;
+              }
+              return prev;
+            });
+          }
+        },
+      });
+      return () => unwatch();
+    } catch (e) {
+      console.error("Watch event error:", e);
+    }
+  }, [publicClient, gameAddress]);
+
+  // Replay interval
+  useEffect(() => {
+    if (!isReplaying) return;
+    
+    const interval = setInterval(() => {
+      setReplayStep((step) => {
+        if (step >= 4) {
+          clearInterval(interval);
+          setTimeout(() => {
+            setIsReplaying(false);
+          }, 1000); // 1 sec after final step
+          return step;
+        }
+        return step + 1;
+      });
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  }, [isReplaying]);
 
   // Read game data using wagmi's useReadContract with the dynamic address
   const {
@@ -116,6 +176,44 @@ export default function GamePage() {
     functionName: "gameCount",
     chainId: targetNetwork.id,
   });
+
+  // FALLBACK: If useWatchContractEvent fails (due to Anvil HTTP polling issues),
+  // we catch the round change via gameCount and fetch the event manually.
+  useEffect(() => {
+    if (gameCount !== undefined) {
+      const currentCount = Number(gameCount);
+      if (prevGameCount !== undefined && currentCount !== prevGameCount && !isReplaying) {
+        if (publicClient && gameAddress) {
+          publicClient
+            .getContractEvents({
+              address: gameAddress as `0x${string}`,
+              abi: PlayGroundABI.abi as any,
+              eventName: "RoundCalculated",
+              fromBlock: "earliest",
+            })
+            .then((logs) => {
+              if (logs && logs.length > 0) {
+                const latestLog = logs[logs.length - 1];
+                const args = latestLog.args as any;
+                if (args && args.p1Moves && args.p2Moves) {
+                  setIsReplaying((prev) => {
+                    if (!prev) {
+                      setReplayStep(0);
+                      setReplayP1Moves([...args.p1Moves]);
+                      setReplayP2Moves([...args.p2Moves]);
+                      return true;
+                    }
+                    return prev;
+                  });
+                }
+              }
+            })
+            .catch(console.error);
+        }
+      }
+      setPrevGameCount(currentCount);
+    }
+  }, [gameCount, prevGameCount, isReplaying, publicClient, gameAddress]);
 
   const { data: gameState, refetch: refetchGameState } = useReadContract({
     address: gameAddress as `0x${string}`,
@@ -208,12 +306,14 @@ export default function GamePage() {
   // Auto-refresh data every 3 seconds to catch backend updates
   useEffect(() => {
     const interval = setInterval(() => {
-      refetchAllData();
-      console.log("Auto-refreshing game data...");
+      if (!isReplaying) {
+        refetchAllData();
+        console.log("Auto-refreshing game data...");
+      }
     }, 3000); // Refresh every 3 seconds
 
     return () => clearInterval(interval);
-  }, [refetchAllData]);
+  }, [refetchAllData, isReplaying]);
 
   // Timer countdown - reset when moveSelectionStartTime changes (new round starts)
   useEffect(() => {
@@ -238,6 +338,10 @@ export default function GamePage() {
 
     // Run immediately
     updateTimer();
+    
+    // Reset moves and submission flag at the start of every round
+    setMoves([0, 0, 0, 0, 0]);
+    setHasSubmittedMoves(false);
 
     // Then run every second
     const interval = setInterval(updateTimer, 1000);
@@ -252,17 +356,19 @@ export default function GamePage() {
   };
 
   const handleSubmitMoves = async () => {
+    if (hasSubmittedMoves) return;
     try {
+      setHasSubmittedMoves(true);
       await writeContractAsync({
         address: gameAddress as `0x${string}`,
         abi: PlayGroundABI.abi,
         functionName: "PerformMoves",
         args: [moves[0], moves[1], moves[2], moves[3], moves[4]],
       });
-      alert("Moves submitted successfully!");
     } catch (error) {
       console.error("Error submitting moves:", error);
       alert("Failed to submit moves");
+      setHasSubmittedMoves(false); // Allow retry on failure
     }
   };
 
@@ -286,14 +392,14 @@ export default function GamePage() {
   const waitTimeRemaining = isWaitingPhase ? startTime - now : 0;
 
   const canSubmitMoves =
-    isPlayer && (gameState === 0 || gameState === undefined) && hasGameStarted && timeRemaining > 0;
+    isPlayer && (gameState === 0 || gameState === undefined) && hasGameStarted && timeRemaining > 0 && !isReplaying && !hasSubmittedMoves;
   const isTimeUp = isMounted && timeRemaining <= 0 && hasGameStarted && !isWaitingPhase;
 
   return (
     <div className="container mx-auto p-6 max-w-6xl">
       <div className="mb-6">
         <div className="flex justify-between items-center mb-4">
-          <h1 className="text-4xl font-bold">Action Game</h1>
+          <h1 className="text-4xl font-bold">Action Arena</h1>
           <button onClick={handleGoBackHome} className="btn btn-outline btn-sm">
             ← Go Back Home
           </button>
@@ -304,67 +410,39 @@ export default function GamePage() {
         </div>
       </div>
 
-      {/* Game Status */}
-      <div className="card bg-base-200 shadow-xl mb-6">
-        <div className="card-body">
-          <h2 className="card-title justify-center">Game Status</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
-            <div>
-              <p className="text-sm text-gray-600">Rounds Remaining</p>
-              <p className="text-2xl font-bold">{gameCount?.toString() || "0"}</p>
-            </div>
-            <div>
-              <p className="text-sm text-gray-600">Time Remaining</p>
-              <p className="text-2xl font-bold">
-                {!isMounted
-                  ? "Loading..."
-                  : isWaitingPhase
-                    ? `Waiting: ${waitTimeRemaining}s`
-                    : hasGameStarted
-                      ? timeRemaining > 0
-                        ? `${timeRemaining}s`
-                        : isTimeUp
-                          ? "Time's Up!"
-                          : `${timeRemaining}s`
-                      : "Ready"}
-              </p>
-            </div>
-            <div>
-              <p className="text-sm text-gray-600">Game State</p>
-              <p className="text-2xl font-bold">
-                {gameState === undefined ? "Loading..." : gameState === 0 ? "Active" : "Over"}
-              </p>
-            </div>
-          </div>
-        </div>
+      {/* Small Game Status Bar */}
+      <div className="flex flex-col md:flex-row justify-between items-center bg-base-300 rounded-lg p-3 px-6 shadow-md mb-6 font-semibold">
+          <div className="text-secondary tracking-widest uppercase text-sm md:border-r border-base-100 pr-6">Rounds Remaining: <span className="text-xl text-white ml-2">{gameCount?.toString() || "0"}</span></div>
+          <div className="text-primary tracking-widest uppercase text-sm md:border-r border-base-100 px-6">State: <span className="text-xl text-white ml-2">{gameState === undefined ? "Loading" : gameState === 0 ? "Active" : "Over"}</span></div>
+          <div className="text-accent tracking-widest uppercase text-sm pl-6">Timer: <span className="text-xl text-white ml-2">{!isMounted ? "..." : isWaitingPhase ? `Wait ${waitTimeRemaining}s` : hasGameStarted ? (timeRemaining > 0 ? `${timeRemaining}s` : "Time's Up") : "Ready"}</span></div>
       </div>
 
+      {/* Replay Overlay Visualizer */}
       {/* Health Bars and Round Counter */}
-      <div className="card shadow-2xl mb-6">
-        <div className="card-body">
-          <div className="relative flex items-center justify-between mb-6">
+      <div className="card shadow-2xl mb-0 rounded-b-none border-2 border-primary/30 border-b-0 relative z-10 bg-[#110e24]">
+        <div className="card-body pb-6 pt-6">
+          <div className="relative flex items-center justify-between">
             {/* Left Health Bar (User) */}
-            <div style={{ width: "250px" }}>
-              <div className="bg-black/90 p-4 rounded-lg border-2 border-yellow-500/50">
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="text-3xl">🧙</div>
-                  <div className="flex-1">
+            <div className="w-5/12 max-w-sm">
+              <div className="bg-black/90 p-2 px-4 rounded-lg border-2 border-yellow-500/50">
+                <div className="flex items-center gap-2 mb-1">
+                  <div className="text-2xl">🧙</div>
+                  <div className="flex-1 flex gap-2 items-baseline">
                     <p className="text-sm font-bold text-yellow-400 uppercase tracking-wider">
-                      {connectedAddress === player1Data?.playerAddress ? player1Data?.name : player2Data?.name || "You"}
+                      {connectedAddress === player1Data?.playerAddress ? player1Data?.name : player2Data?.name || "Player"}
                     </p>
-                    <p className="text-xs text-gray-400">(You)</p>
                   </div>
                 </div>
-                <div className="relative h-8 bg-gray-900 rounded border-2 border-gray-700 overflow-hidden">
+                <div className="relative h-4 bg-gray-900 rounded border-2 border-gray-700 overflow-hidden shadow-inner">
                   <div
-                    className="absolute top-0 left-0 h-full bg-gradient-to-r from-red-600 via-red-500 to-yellow-500 transition-all duration-500"
+                    className="absolute top-0 left-0 h-full bg-gradient-to-r from-red-600 via-red-500 to-yellow-500 transition-all duration-500 shadow-xl"
                     style={{
                       width: `${(Number(connectedAddress === player1Data?.playerAddress ? player1Data?.health : player2Data?.health || 0) / 10) * 100}%`,
                     }}
                   />
                   <div
-                    className="absolute inset-0 flex items-center justify-center text-sm font-bold text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]"
-                    style={{ textShadow: "2px 2px 4px black" }}
+                    className="absolute inset-0 flex items-center justify-center text-[10px] font-black text-white drop-shadow-md"
+                    style={{ textShadow: "1px 1px 2px black" }}
                   >
                     {Number(
                       connectedAddress === player1Data?.playerAddress ? player1Data?.health : player2Data?.health || 0,
@@ -372,13 +450,19 @@ export default function GamePage() {
                     / 10
                   </div>
                 </div>
+                {/* Attack Stats Attached to Health Bar */}
+                <div className="flex gap-4 mt-2 text-[10px] font-bold text-gray-400 justify-center bg-gray-900/50 rounded py-0.5 border border-gray-800">
+                   <span className="text-blue-400">Basic: {connectedAddress === player1Data?.playerAddress ? player1Data?.basicAttackCount?.toString() : player2Data?.basicAttackCount?.toString() || "0"}</span>
+                   <span className="text-purple-400">Med: {connectedAddress === player1Data?.playerAddress ? player1Data?.mediumAttackCount?.toString() : player2Data?.mediumAttackCount?.toString() || "0"}</span>
+                   <span className="text-rose-400">Spec: {connectedAddress === player1Data?.playerAddress ? player1Data?.specialAttackCount?.toString() : player2Data?.specialAttackCount?.toString() || "0"}</span>
+                </div>
               </div>
             </div>
 
             {/* Round Counter */}
-            <div>
+            <div className="z-20 transform -translate-y-2">
               <div
-                className="bg-gradient-to-b from-yellow-400 to-orange-500 text-black px-8 py-3 rounded font-black text-2xl shadow-2xl border-4 border-yellow-600"
+                className="bg-gradient-to-b from-yellow-400 to-orange-500 text-black px-6 py-2 rounded-lg font-black text-xl shadow-[0_4px_15px_rgba(0,0,0,0.8)] border-[3px] border-yellow-600 tracking-wider"
                 style={{ textShadow: "1px 1px 0px white" }}
               >
                 ROUND {6 - (gameCount ? Number(gameCount) : 0)}
@@ -386,29 +470,28 @@ export default function GamePage() {
             </div>
 
             {/* Right Health Bar (Opponent) */}
-            <div style={{ width: "250px" }}>
-              <div className="bg-black/90 p-4 rounded-lg border-2 border-yellow-500/50">
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="flex-1 text-right">
+            <div className="w-5/12 max-w-sm">
+              <div className="bg-black/90 p-2 px-4 rounded-lg border-2 border-yellow-500/50">
+                <div className="flex items-center gap-2 mb-1 justify-end">
+                  <div className="flex-1 flex gap-2 items-baseline justify-end">
                     <p className="text-sm font-bold text-yellow-400 uppercase tracking-wider">
                       {connectedAddress === player1Data?.playerAddress
                         ? player2Data?.name
-                        : player1Data?.name || "Opponent"}
+                        : player1Data?.name || "Player"}
                     </p>
-                    <p className="text-xs text-gray-400">Opponent</p>
                   </div>
-                  <div className="text-3xl">🧙</div>
+                  <div className="text-2xl">👺</div>
                 </div>
-                <div className="relative h-8 bg-gray-900 rounded border-2 border-gray-700 overflow-hidden">
+                <div className="relative h-4 bg-gray-900 rounded border-2 border-gray-700 overflow-hidden shadow-inner flex justify-end">
                   <div
-                    className="absolute top-0 right-0 h-full bg-gradient-to-l from-red-600 via-red-500 to-yellow-500 transition-all duration-500"
+                    className="absolute top-0 right-0 h-full bg-gradient-to-l from-red-600 via-red-500 to-yellow-500 transition-all duration-500 shadow-xl"
                     style={{
                       width: `${(Number(connectedAddress === player1Data?.playerAddress ? player2Data?.health : player1Data?.health || 0) / 10) * 100}%`,
                     }}
                   />
                   <div
-                    className="absolute inset-0 flex items-center justify-center text-sm font-bold text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]"
-                    style={{ textShadow: "2px 2px 4px black" }}
+                    className="absolute inset-0 flex items-center justify-center text-[10px] font-black text-white drop-shadow-md"
+                    style={{ textShadow: "1px 1px 2px black" }}
                   >
                     {Number(
                       connectedAddress === player1Data?.playerAddress ? player2Data?.health : player1Data?.health || 0,
@@ -416,106 +499,11 @@ export default function GamePage() {
                     / 10
                   </div>
                 </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Players Info - Side by Side */}
-      <div className="card bg-base-200 shadow-xl mb-6">
-        <div className="card-body">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Left Side - Me */}
-            <div className="bg-primary text-primary-content rounded-lg p-6">
-              <h3 className="text-2xl font-bold mb-2">You</h3>
-              <p className="text-sm mb-1">
-                {connectedAddress === player1Data?.playerAddress ? player1Data?.name : player2Data?.name}
-              </p>
-              <div className="text-xs opacity-70 mb-4">
-                <Address address={connectedAddress} />
-              </div>
-
-              <div className="space-y-3">
-                <div className="bg-primary-focus rounded-lg p-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm">Basic Attacks</span>
-                    <span className="text-xl font-bold">
-                      {connectedAddress === player1Data?.playerAddress
-                        ? player1Data?.basicAttackCount?.toString() || "0"
-                        : player2Data?.basicAttackCount?.toString() || "0"}
-                    </span>
-                  </div>
-                </div>
-                <div className="bg-primary-focus rounded-lg p-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm">Medium Attacks</span>
-                    <span className="text-xl font-bold">
-                      {connectedAddress === player1Data?.playerAddress
-                        ? player1Data?.mediumAttackCount?.toString() || "0"
-                        : player2Data?.mediumAttackCount?.toString() || "0"}
-                    </span>
-                  </div>
-                </div>
-                <div className="bg-primary-focus rounded-lg p-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm">Special Attacks</span>
-                    <span className="text-xl font-bold">
-                      {connectedAddress === player1Data?.playerAddress
-                        ? player1Data?.specialAttackCount?.toString() || "0"
-                        : player2Data?.specialAttackCount?.toString() || "0"}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Right Side - Opponent */}
-            <div className="bg-base-300 rounded-lg p-6">
-              <h3 className="text-2xl font-bold mb-2">Opponent</h3>
-              <p className="text-sm mb-1">
-                {connectedAddress === player1Data?.playerAddress ? player2Data?.name : player1Data?.name}
-              </p>
-              <div className="text-xs opacity-70 mb-4">
-                <Address
-                  address={
-                    connectedAddress === player1Data?.playerAddress
-                      ? player2Data?.playerAddress
-                      : player1Data?.playerAddress
-                  }
-                />
-              </div>
-
-              <div className="space-y-3">
-                <div className="bg-base-100 rounded-lg p-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm">Basic Attacks</span>
-                    <span className="text-xl font-bold">
-                      {connectedAddress === player1Data?.playerAddress
-                        ? player2Data?.basicAttackCount?.toString() || "0"
-                        : player1Data?.basicAttackCount?.toString() || "0"}
-                    </span>
-                  </div>
-                </div>
-                <div className="bg-base-100 rounded-lg p-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm">Medium Attacks</span>
-                    <span className="text-xl font-bold">
-                      {connectedAddress === player1Data?.playerAddress
-                        ? player2Data?.mediumAttackCount?.toString() || "0"
-                        : player1Data?.mediumAttackCount?.toString() || "0"}
-                    </span>
-                  </div>
-                </div>
-                <div className="bg-base-100 rounded-lg p-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm">Special Attacks</span>
-                    <span className="text-xl font-bold">
-                      {connectedAddress === player1Data?.playerAddress
-                        ? player2Data?.specialAttackCount?.toString() || "0"
-                        : player1Data?.specialAttackCount?.toString() || "0"}
-                    </span>
-                  </div>
+                {/* Attack Stats Attached to Health Bar */}
+                <div className="flex gap-4 mt-2 text-[10px] font-bold text-gray-400 justify-center bg-gray-900/50 rounded py-0.5 border border-gray-800">
+                   <span className="text-blue-400">Basic: {connectedAddress === player1Data?.playerAddress ? player2Data?.basicAttackCount?.toString() : player1Data?.basicAttackCount?.toString() || "0"}</span>
+                   <span className="text-purple-400">Med: {connectedAddress === player1Data?.playerAddress ? player2Data?.mediumAttackCount?.toString() : player1Data?.mediumAttackCount?.toString() || "0"}</span>
+                   <span className="text-rose-400">Spec: {connectedAddress === player1Data?.playerAddress ? player2Data?.specialAttackCount?.toString() : player1Data?.specialAttackCount?.toString() || "0"}</span>
                 </div>
               </div>
             </div>
@@ -523,6 +511,18 @@ export default function GamePage() {
         </div>
       </div>
 
+      {/* Replay Overlay Visualizer (Now Always Visible) */}
+      <div className="mb-8 relative z-0">
+        <BattleArena 
+            replayStep={replayStep} 
+            p1Moves={replayP1Moves} 
+            p2Moves={replayP2Moves} 
+            p1Name={player1Data?.name || 'Player 1'} 
+            p2Name={player2Data?.name || 'Player 2'} 
+            isReplaying={isReplaying}
+            isReversePerspective={connectedAddress === player2Data?.playerAddress}
+        />
+      </div>
       {/* Move Selection */}
       {!isPlayer && (
         <div className="alert alert-warning shadow-lg mb-6">
@@ -557,64 +557,31 @@ export default function GamePage() {
           <div className="card-body">
             <h2 className="card-title">Select Your Moves (5 moves per round)</h2>
             {!hasGameStarted && <p className="text-warning text-sm mb-4">⏳ Game will start soon...</p>}
-            <div className="grid grid-cols-1 gap-6">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               {moves.map((move, index) => (
-                <div key={index} className="form-control">
-                  <label className="label">
-                    <span className="label-text font-semibold text-lg">
-                      Move {index + 1}: {MOVE_NAMES[move]}
-                    </span>
+                <div key={index} className="form-control bg-base-300 p-3 rounded-xl border border-base-200 shadow-inner">
+                  <label className="label py-1">
+                    <span className="label-text font-bold text-primary">Move {index + 1}</span>
                   </label>
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                    <button
-                      className={`btn ${move === 0 ? "btn-primary" : "btn-outline"}`}
-                      onClick={() => handleMoveChange(index, 0)}
-                      disabled={!canSubmitMoves}
-                    >
-                      No Move
-                    </button>
-                    <button
-                      className={`btn ${move === 1 ? "btn-primary" : "btn-outline"}`}
-                      onClick={() => handleMoveChange(index, 1)}
-                      disabled={!canSubmitMoves}
-                    >
-                      ⬆️ Move Up
-                    </button>
-                    <button
-                      className={`btn ${move === 2 ? "btn-primary" : "btn-outline"}`}
-                      onClick={() => handleMoveChange(index, 2)}
-                      disabled={!canSubmitMoves}
-                    >
-                      ⬇️ Move Down
-                    </button>
-                    <button
-                      className={`btn ${move === 3 ? "btn-primary" : "btn-outline"}`}
-                      onClick={() => handleMoveChange(index, 3)}
-                      disabled={!canSubmitMoves}
-                    >
-                      ⚔️ Basic (1💥)
-                    </button>
-                    <button
-                      className={`btn ${move === 4 ? "btn-primary" : "btn-outline"}`}
-                      onClick={() => handleMoveChange(index, 4)}
-                      disabled={!canSubmitMoves}
-                    >
-                      ⚔️⚔️ Medium (2💥)
-                    </button>
-                    <button
-                      className={`btn ${move === 5 ? "btn-primary" : "btn-outline"}`}
-                      onClick={() => handleMoveChange(index, 5)}
-                      disabled={!canSubmitMoves}
-                    >
-                      💥 Special (3💥)
-                    </button>
-                  </div>
+                  <select 
+                    className="select select-bordered select-sm w-full font-semibold focus:outline-none focus:border-primary"
+                    value={move}
+                    onChange={(e) => handleMoveChange(index, Number(e.target.value))}
+                    disabled={!canSubmitMoves}
+                  >
+                    <option value={0}>🛡️ Stay</option>
+                    <option value={1}>⬆️ Up</option>
+                    <option value={2}>⬇️ Down</option>
+                    <option value={3}>⚔️ Basic (1💥)</option>
+                    <option value={4}>🔥 Medium (2💥)</option>
+                    <option value={5}>⚡ Special (3💥)</option>
+                  </select>
                 </div>
               ))}
             </div>
             <div className="card-actions justify-end mt-4">
               <button className="btn btn-primary btn-lg" onClick={handleSubmitMoves} disabled={!canSubmitMoves}>
-                Submit All Moves
+                {hasSubmittedMoves ? "✅ Moves Submitted" : "Submit All Moves"}
               </button>
             </div>
             {!canSubmitMoves && hasGameStarted && timeRemaining === 0 && (

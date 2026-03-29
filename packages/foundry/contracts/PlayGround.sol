@@ -17,7 +17,9 @@ contract PlayGround {
         uint8 roundNumber,
         uint256 player1Health,
         uint256 player2Health,
-        uint256 nextRoundStartTime
+        uint256 nextRoundStartTime,
+        uint8[5] p1Moves,
+        uint8[5] p2Moves
     );
 
     modifier activeGame() {
@@ -38,17 +40,9 @@ contract PlayGround {
     Player public player1;
     Player public player2;
 
-    struct Moves {
-        uint8 move1;
-        uint8 move2;
-        uint8 move3;
-        uint8 move4;
-        uint8 move5;
-        uint8 move6;
-    }
-
-    Moves public P1moves;
-    Moves public P2moves;
+    // Replaced Moves struct with fixed-size arrays — eliminates getMoveByIndex dispatch
+    uint8[6] public P1moves;
+    uint8[6] public P2moves;
 
     constructor(
         address _owner,
@@ -102,57 +96,47 @@ contract PlayGround {
                 if (basicRemaining > 0) {
                     basicRemaining--;
                 } else {
-                    moves[i] = 0; // Convert to stay
+                    moves[i] = 0;
                 }
             } else if (moves[i] == 4) {
                 if (mediumRemaining > 0) {
                     mediumRemaining--;
                 } else {
-                    moves[i] = 0; // Convert to stay
+                    moves[i] = 0;
                 }
             } else if (moves[i] == 5) {
                 if (specialRemaining > 0) {
                     specialRemaining--;
                 } else {
-                    moves[i] = 0; // Convert to stay
+                    moves[i] = 0;
                 }
             }
         }
 
-        _move1 = moves[0];
-        _move2 = moves[1];
-        _move3 = moves[2];
-        _move4 = moves[3];
-        _move5 = moves[4];
-
+        // Write directly to storage array — no intermediate copy needed
         if (msg.sender == player1.playerAddress) {
-            P1moves = Moves(_move1, _move2, _move3, _move4, _move5, 0);
+            P1moves[0] = moves[0];
+            P1moves[1] = moves[1];
+            P1moves[2] = moves[2];
+            P1moves[3] = moves[3];
+            P1moves[4] = moves[4];
+            P1moves[5] = 0;
             player1.basicAttackCount = basicRemaining;
             player1.mediumAttackCount = mediumRemaining;
             player1.specialAttackCount = specialRemaining;
             player1Moved = true;
         } else {
-            P2moves = Moves(_move1, _move2, _move3, _move4, _move5, 0);
+            P2moves[0] = moves[0];
+            P2moves[1] = moves[1];
+            P2moves[2] = moves[2];
+            P2moves[3] = moves[3];
+            P2moves[4] = moves[4];
+            P2moves[5] = 0;
             player2.basicAttackCount = basicRemaining;
             player2.mediumAttackCount = mediumRemaining;
             player2.specialAttackCount = specialRemaining;
             player2Moved = true;
         }
-        
-    }
-
-    // stay 0 for no move, 1 for up , 2 for down , 3 basic attack, 4 medium attack , 5 special attack
-    function getMoveByIndex(
-        Moves memory moves,
-        uint index
-    ) internal pure returns (uint8) {
-        if (index == 0) return moves.move1;
-        if (index == 1) return moves.move2;
-        if (index == 2) return moves.move3;
-        if (index == 3) return moves.move4;
-        if (index == 4) return moves.move5;
-        if (index == 5) return moves.move6;
-        return 0;
     }
 
     function calculateResult() public activeGame {
@@ -162,61 +146,76 @@ contract PlayGround {
             "Result calculation not allowed yet"
         );
         gameCount--;
-        uint8[] memory P1states = new uint8[](6);
-        uint8[] memory P2states = new uint8[](6);
+
+        // Load all moves into memory once — replaces ~20+ getMoveByIndex calls
+        uint8[6] memory p1m;
+        uint8[6] memory p2m;
+        for (uint i = 0; i < 6; i++) {
+            p1m[i] = P1moves[i];
+            p2m[i] = P2moves[i];
+        }
+
+        uint8[5] memory p1MovesArray;
+        uint8[5] memory p2MovesArray;
+        for (uint i = 0; i < 5; i++) {
+            p1MovesArray[i] = p1m[i];
+            p2MovesArray[i] = p2m[i];
+        }
+
+        // Compute position states — direct array access instead of getMoveByIndex
+        uint8[6] memory P1states;
+        uint8[6] memory P2states;
 
         for (uint i = 0; i < 6; i++) {
-            uint8 p1Move = getMoveByIndex(P1moves, i);
-            uint8 p2Move = getMoveByIndex(P2moves, i);
-            if (p1Move == 0) {
+            if (p1m[i] == 0) {
                 P1states[i] = P1initstate;
-            } else if (p1Move == 1) {
+            } else if (p1m[i] == 1) {
                 P1states[i] = 1;
-            } else if (p1Move == 2) {
+            } else if (p1m[i] == 2) {
                 P1states[i] = 0;
             }
-            if (p2Move == 0) {
+            if (p2m[i] == 0) {
                 P2states[i] = P2initstate;
-            } else if (p2Move == 1) {
+            } else if (p2m[i] == 1) {
                 P2states[i] = 1;
-            } else if (p2Move == 2) {
+            } else if (p2m[i] == 2) {
                 P2states[i] = 0;
             }
-            // Simple logic: higher move value wins
+
             P1initstate = P1states[i];
             P2initstate = P2states[i];
         }
+
+        // Calculate damage — all lookups via cached memory arrays
         uint8 p1Damage = 0;
         uint8 p2Damage = 0;
         for (uint i = 0; i < 5; i++) {
-            uint8 p1Move = getMoveByIndex(P1moves, i);
-            uint8 p2Move = getMoveByIndex(P2moves, i);
+            uint8 p1Move = p1m[i];
+            uint8 p2Move = p2m[i];
 
             if (p1Move >= 3 && P1states[i] == P2states[i + 1]) {
                 int8 damage = int8(p1Move) - 2;
-                if (
-                    getMoveByIndex(P2moves, i) >= 3 &&
-                    P1states[i] == P2states[i]
-                ) {
+                if (i > 0 && p2m[i - 1] >= 3 && P1states[i] == P2states[i - 1]) {
+                    damage = damage - int8(p2m[i - 1] - 2);
+                }
+                if (p2Move >= 3 && P1states[i] == P2states[i]) {
                     damage = damage - int8(p2Move - 2);
                 }
-
-                if (getMoveByIndex(P2moves, i + 1) >= 3) {
-                    damage = damage - int8(getMoveByIndex(P2moves, i + 1) - 2);
+                if (p2m[i + 1] >= 3) {
+                    damage = damage - int8(p2m[i + 1] - 2);
                 }
                 p2Damage += damage > 0 ? uint8(damage) : 0;
             }
             if (p2Move >= 3 && P2states[i] == P1states[i + 1]) {
                 int8 damage = int8(p2Move) - 2;
-                if (
-                    getMoveByIndex(P1moves, i) >= 3 &&
-                    P2states[i] == P1states[i]
-                ) {
+                if (i > 0 && p1m[i - 1] >= 3 && P2states[i] == P1states[i - 1]) {
+                    damage = damage - int8(p1m[i - 1] - 2);
+                }
+                if (p1Move >= 3 && P2states[i] == P1states[i]) {
                     damage = damage - int8(p1Move - 2);
                 }
-
-                if (getMoveByIndex(P1moves, i + 1) >= 3) {
-                    damage = damage - int8(getMoveByIndex(P1moves, i + 1) - 2);
+                if (p1m[i + 1] >= 3) {
+                    damage = damage - int8(p1m[i + 1] - 2);
                 }
                 p1Damage += damage > 0 ? uint8(damage) : 0;
             }
@@ -227,6 +226,7 @@ contract PlayGround {
         } else {
             player1.health -= p1Damage;
         }
+
         if (p2Damage >= player2.health) {
             player2.health = 0;
         } else {
@@ -236,16 +236,23 @@ contract PlayGround {
         if (player1.health == 0 || player2.health == 0 || gameCount == 0) {
             gameOver();
             gameState = Gamestate.Over;
-            emit RoundCalculated(gameCount, player1.health, player2.health, 0);
+            emit RoundCalculated(gameCount, player1.health, player2.health, 0, p1MovesArray, p2MovesArray);
         } else {
             moveSelectionStartTime = block.timestamp + waitDuration;
-            P1moves = Moves(0, 0, 0, 0, 0, 0);
-            P2moves = Moves(0, 0, 0, 0, 0, 0);
+            // Reset storage arrays
+            for (uint i = 0; i < 6; i++) {
+                P1moves[i] = 0;
+                P2moves[i] = 0;
+            }
+            player1Moved = false;
+            player2Moved = false;
             emit RoundCalculated(
                 gameCount,
                 player1.health,
                 player2.health,
-                moveSelectionStartTime
+                moveSelectionStartTime,
+                p1MovesArray,
+                p2MovesArray
             );
         }
     }
