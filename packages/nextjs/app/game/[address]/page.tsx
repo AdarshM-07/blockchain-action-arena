@@ -1,24 +1,15 @@
 "use client";
-// Force Next.js HMR to pick up the new PlayGround.json ABI
 
+// Force Next.js HMR to pick up the new PlayGround.json ABI
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Address } from "@scaffold-ui/components";
-import { useAccount, useReadContract, useWriteContract, usePublicClient } from "wagmi";
-import PlayGroundABI from "~~/contracts/PlayGround.json";
+import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { BattleArena } from "~~/components/BattleArena";
+import PlayGroundABI from "~~/contracts/PlayGround.json";
 import { useScaffoldWriteContract, useTargetNetwork } from "~~/hooks/scaffold-eth";
 
 type MoveType = 0 | 1 | 2 | 3 | 4 | 5;
-
-const MOVE_NAMES = {
-  0: "No Move",
-  1: "Move Up",
-  2: "Move Down",
-  3: "Basic Attack",
-  4: "Medium Attack",
-  5: "Special Attack",
-};
 
 type PlayerData = {
   playerAddress: `0x${string}`;
@@ -59,11 +50,12 @@ export default function GamePage() {
         address: gameAddress as `0x${string}`,
         abi: PlayGroundABI.abi as any,
         eventName: "RoundCalculated",
-        onLogs: (logs) => {
+        onLogs: logs => {
           if (!logs || !logs[0]) return;
-          const args = logs[0].args as any;
+          const firstLog = logs[0] as any;
+          const args = firstLog.args as any;
           if (args.p1Moves && args.p2Moves) {
-            setIsReplaying((prev) => {
+            setIsReplaying(prev => {
               if (!prev) {
                 setReplayStep(0);
                 setReplayP1Moves([...args.p1Moves]);
@@ -84,9 +76,9 @@ export default function GamePage() {
   // Replay interval
   useEffect(() => {
     if (!isReplaying) return;
-    
+
     const interval = setInterval(() => {
-      setReplayStep((step) => {
+      setReplayStep(step => {
         if (step >= 4) {
           clearInterval(interval);
           setTimeout(() => {
@@ -97,7 +89,7 @@ export default function GamePage() {
         return step + 1;
       });
     }, 1000);
-    
+
     return () => clearInterval(interval);
   }, [isReplaying]);
 
@@ -191,12 +183,12 @@ export default function GamePage() {
               eventName: "RoundCalculated",
               fromBlock: "earliest",
             })
-            .then((logs) => {
+            .then(logs => {
               if (logs && logs.length > 0) {
-                const latestLog = logs[logs.length - 1];
+                const latestLog = logs[logs.length - 1] as any;
                 const args = latestLog.args as any;
                 if (args && args.p1Moves && args.p2Moves) {
-                  setIsReplaying((prev) => {
+                  setIsReplaying(prev => {
                     if (!prev) {
                       setReplayStep(0);
                       setReplayP1Moves([...args.p1Moves]);
@@ -338,7 +330,7 @@ export default function GamePage() {
 
     // Run immediately
     updateTimer();
-    
+
     // Reset moves and submission flag at the start of every round
     setMoves([0, 0, 0, 0, 0]);
     setHasSubmittedMoves(false);
@@ -392,8 +384,12 @@ export default function GamePage() {
   const waitTimeRemaining = isWaitingPhase ? startTime - now : 0;
 
   const canSubmitMoves =
-    isPlayer && (gameState === 0 || gameState === undefined) && hasGameStarted && timeRemaining > 0 && !isReplaying && !hasSubmittedMoves;
-  const isTimeUp = isMounted && timeRemaining <= 0 && hasGameStarted && !isWaitingPhase;
+    isPlayer &&
+    (gameState === 0 || gameState === undefined) &&
+    hasGameStarted &&
+    timeRemaining > 0 &&
+    !isReplaying &&
+    !hasSubmittedMoves;
 
   return (
     <div className="container mx-auto p-6 max-w-6xl">
@@ -412,9 +408,29 @@ export default function GamePage() {
 
       {/* Small Game Status Bar */}
       <div className="flex flex-col md:flex-row justify-between items-center bg-base-300 rounded-lg p-3 px-6 shadow-md mb-6 font-semibold">
-          <div className="text-secondary tracking-widest uppercase text-sm md:border-r border-base-100 pr-6">Rounds Remaining: <span className="text-xl text-white ml-2">{gameCount?.toString() || "0"}</span></div>
-          <div className="text-primary tracking-widest uppercase text-sm md:border-r border-base-100 px-6">State: <span className="text-xl text-white ml-2">{gameState === undefined ? "Loading" : gameState === 0 ? "Active" : "Over"}</span></div>
-          <div className="text-accent tracking-widest uppercase text-sm pl-6">Timer: <span className="text-xl text-white ml-2">{!isMounted ? "..." : isWaitingPhase ? `Wait ${waitTimeRemaining}s` : hasGameStarted ? (timeRemaining > 0 ? `${timeRemaining}s` : "Time's Up") : "Ready"}</span></div>
+        <div className="text-secondary tracking-widest uppercase text-sm md:border-r border-base-100 pr-6">
+          Rounds Remaining: <span className="text-xl text-white ml-2">{gameCount?.toString() || "0"}</span>
+        </div>
+        <div className="text-primary tracking-widest uppercase text-sm md:border-r border-base-100 px-6">
+          State:{" "}
+          <span className="text-xl text-white ml-2">
+            {gameState === undefined ? "Loading" : gameState === 0 ? "Active" : "Over"}
+          </span>
+        </div>
+        <div className="text-accent tracking-widest uppercase text-sm pl-6">
+          Timer:{" "}
+          <span className="text-xl text-white ml-2">
+            {!isMounted
+              ? "..."
+              : isWaitingPhase
+                ? `Wait ${waitTimeRemaining}s`
+                : hasGameStarted
+                  ? timeRemaining > 0
+                    ? `${timeRemaining}s`
+                    : "Time's Up"
+                  : "Ready"}
+          </span>
+        </div>
       </div>
 
       {/* Replay Overlay Visualizer */}
@@ -429,7 +445,9 @@ export default function GamePage() {
                   <div className="text-2xl">🧙</div>
                   <div className="flex-1 flex gap-2 items-baseline">
                     <p className="text-sm font-bold text-yellow-400 uppercase tracking-wider">
-                      {connectedAddress === player1Data?.playerAddress ? player1Data?.name : player2Data?.name || "Player"}
+                      {connectedAddress === player1Data?.playerAddress
+                        ? player1Data?.name
+                        : player2Data?.name || "Player"}
                     </p>
                   </div>
                 </div>
@@ -452,9 +470,24 @@ export default function GamePage() {
                 </div>
                 {/* Attack Stats Attached to Health Bar */}
                 <div className="flex gap-4 mt-2 text-[10px] font-bold text-gray-400 justify-center bg-gray-900/50 rounded py-0.5 border border-gray-800">
-                   <span className="text-blue-400">Basic: {connectedAddress === player1Data?.playerAddress ? player1Data?.basicAttackCount?.toString() : player2Data?.basicAttackCount?.toString() || "0"}</span>
-                   <span className="text-purple-400">Med: {connectedAddress === player1Data?.playerAddress ? player1Data?.mediumAttackCount?.toString() : player2Data?.mediumAttackCount?.toString() || "0"}</span>
-                   <span className="text-rose-400">Spec: {connectedAddress === player1Data?.playerAddress ? player1Data?.specialAttackCount?.toString() : player2Data?.specialAttackCount?.toString() || "0"}</span>
+                  <span className="text-blue-400">
+                    Basic:{" "}
+                    {connectedAddress === player1Data?.playerAddress
+                      ? player1Data?.basicAttackCount?.toString()
+                      : player2Data?.basicAttackCount?.toString() || "0"}
+                  </span>
+                  <span className="text-purple-400">
+                    Med:{" "}
+                    {connectedAddress === player1Data?.playerAddress
+                      ? player1Data?.mediumAttackCount?.toString()
+                      : player2Data?.mediumAttackCount?.toString() || "0"}
+                  </span>
+                  <span className="text-rose-400">
+                    Spec:{" "}
+                    {connectedAddress === player1Data?.playerAddress
+                      ? player1Data?.specialAttackCount?.toString()
+                      : player2Data?.specialAttackCount?.toString() || "0"}
+                  </span>
                 </div>
               </div>
             </div>
@@ -501,9 +534,24 @@ export default function GamePage() {
                 </div>
                 {/* Attack Stats Attached to Health Bar */}
                 <div className="flex gap-4 mt-2 text-[10px] font-bold text-gray-400 justify-center bg-gray-900/50 rounded py-0.5 border border-gray-800">
-                   <span className="text-blue-400">Basic: {connectedAddress === player1Data?.playerAddress ? player2Data?.basicAttackCount?.toString() : player1Data?.basicAttackCount?.toString() || "0"}</span>
-                   <span className="text-purple-400">Med: {connectedAddress === player1Data?.playerAddress ? player2Data?.mediumAttackCount?.toString() : player1Data?.mediumAttackCount?.toString() || "0"}</span>
-                   <span className="text-rose-400">Spec: {connectedAddress === player1Data?.playerAddress ? player2Data?.specialAttackCount?.toString() : player1Data?.specialAttackCount?.toString() || "0"}</span>
+                  <span className="text-blue-400">
+                    Basic:{" "}
+                    {connectedAddress === player1Data?.playerAddress
+                      ? player2Data?.basicAttackCount?.toString()
+                      : player1Data?.basicAttackCount?.toString() || "0"}
+                  </span>
+                  <span className="text-purple-400">
+                    Med:{" "}
+                    {connectedAddress === player1Data?.playerAddress
+                      ? player2Data?.mediumAttackCount?.toString()
+                      : player1Data?.mediumAttackCount?.toString() || "0"}
+                  </span>
+                  <span className="text-rose-400">
+                    Spec:{" "}
+                    {connectedAddress === player1Data?.playerAddress
+                      ? player2Data?.specialAttackCount?.toString()
+                      : player1Data?.specialAttackCount?.toString() || "0"}
+                  </span>
                 </div>
               </div>
             </div>
@@ -513,14 +561,14 @@ export default function GamePage() {
 
       {/* Replay Overlay Visualizer (Now Always Visible) */}
       <div className="mb-8 relative z-0">
-        <BattleArena 
-            replayStep={replayStep} 
-            p1Moves={replayP1Moves} 
-            p2Moves={replayP2Moves} 
-            p1Name={player1Data?.name || 'Player 1'} 
-            p2Name={player2Data?.name || 'Player 2'} 
-            isReplaying={isReplaying}
-            isReversePerspective={connectedAddress === player2Data?.playerAddress}
+        <BattleArena
+          replayStep={replayStep}
+          p1Moves={replayP1Moves}
+          p2Moves={replayP2Moves}
+          p1Name={player1Data?.name || "Player 1"}
+          p2Name={player2Data?.name || "Player 2"}
+          isReplaying={isReplaying}
+          isReversePerspective={connectedAddress === player2Data?.playerAddress}
         />
       </div>
       {/* Move Selection */}
@@ -559,14 +607,17 @@ export default function GamePage() {
             {!hasGameStarted && <p className="text-warning text-sm mb-4">⏳ Game will start soon...</p>}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               {moves.map((move, index) => (
-                <div key={index} className="form-control bg-base-300 p-3 rounded-xl border border-base-200 shadow-inner">
+                <div
+                  key={index}
+                  className="form-control bg-base-300 p-3 rounded-xl border border-base-200 shadow-inner"
+                >
                   <label className="label py-1">
                     <span className="label-text font-bold text-primary">Move {index + 1}</span>
                   </label>
-                  <select 
+                  <select
                     className="select select-bordered select-sm w-full font-semibold focus:outline-none focus:border-primary"
                     value={move}
-                    onChange={(e) => handleMoveChange(index, Number(e.target.value))}
+                    onChange={e => handleMoveChange(index, Number(e.target.value) as MoveType)}
                     disabled={!canSubmitMoves}
                   >
                     <option value={0}>🛡️ Stay</option>
